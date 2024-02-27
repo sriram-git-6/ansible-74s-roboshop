@@ -1,0 +1,81 @@
+- name: Install catalogue component
+  hosts: catalogue
+  become: yes
+  tasks:
+    - name: setup NPM source
+      ansible.builtin.shell: "curl -sL https://rpm.nodesource.com/setup_lts.x | bash"
+
+    - name: Install NodeJS
+      ansible.builtin.yum:
+        name: nodejs
+        state: installed
+
+    - name: check roboshop user exist or not
+      ansible.builtin.command: id roboshop
+        register: out #output is variable name
+        ignore_errors: true
+
+    - when: out.rc != 0
+      name: create user roboshop
+      become: yes # we need sudo access for this task only
+      ansible.builtin.user:
+        name: roboshop
+
+    - name: check /app directory exists or not
+      ansible.builtin.stat:            # Stat module used to retrieve file or file system metadata.
+        path: /app
+        register: directory             # Stores the result of this task into a variable named directory
+
+    - name: print the directory stats
+      ansible.builtin.debug:
+        msg: "output: {{directory}}"
+
+    - when: directory.stat.exists == False
+      name: create /app directory
+      ansible.builtin.file:
+        path: /app
+        state: directory
+
+    - name: download catalogue artifact
+      ansible.builtin.get_url:
+        url: https://roboshop-builds.s3.amazonaws.com/catalogue.zip
+        dest: /tmp
+
+    - name: extract catalogue artifact
+      ansible.builtin.unarchive:         # This module is used to perform the extraction operation
+        src: /tmp/catalogue.zip          # This specifies the source path of the archive file 
+        dest: /app                       # specifies the destination directory where the contents of the archive will be extracted
+        remote_src: yes                  # Indicates that the src path is on the remote target machine, not on the control machine where Ansible is being executed. 
+
+    - name: install dependencies
+      ansible.builtin.command: npm install
+      args:
+        chdir: /app                 # This is an argument for the command module, It specifies in which directory this command should be executed.
+
+    - name: copy catalogue service
+      ansible.builtin.copy:
+        src: catalogue.service
+        dest: /etc/systemd/system/catalogue.service
+
+    - name: deamon reload
+      ansible.builtin.systemd:
+        daemon_reload: true # This means daemon re-reads its configuration files without actually stopping or restarting the service.
+
+    - name: copy mongo repo to yum.repos.d
+      ansible.builtin.copy:
+        src: mongodb.repo
+        dest: /etc/yum.repos.d/mongo.repo
+
+    - name: Install MongoDB client
+      ansible.builtin.yum:
+        name: mongodb-org-shell
+        state: installed
+
+    - name: load catalogue data
+      ansible.builtin.command: mongo --host mongodb.joindevops.online < /app/schema/catalogue.js
+
+    - name: restart catalogue
+      ansible.builtin.service:
+        name: catalogue
+        state: restarted  # stops the daemon, then starts the service again.
+        enabled: true
